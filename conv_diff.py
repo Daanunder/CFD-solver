@@ -24,6 +24,7 @@ class convDiffModel():
     """
     def __init__(self, modelName):
         # Initialize model
+        self.log = False
         self.get_basic_settings(modelName)
         self.produce_error = False
 
@@ -175,15 +176,24 @@ class convDiffModel():
             # create b with tn
             RHS = (np.identity(self.grid.vector_size) + self.RHS)
             b = np.dot(RHS, tn) + np.dot(self.RHS_const, np.ones(self.grid.vector_size))
-
             # create A
             A = np.identity(self.grid.vector_size) - self.LHS
 
             # solve A, b to obtain tn+1
             tn = np.linalg.solve(A, b)
             self.result[0:, ti] = tn
-
-
+            
+        if self.log:
+            print("RHS")
+            print(self.RHS)
+            print("Constant RHS (if fixed BC with c_0 and c_L)")
+            print(self.RHS_const)
+            print("Resulting RHS multiplied by c_n")
+            print(RHS)
+            print("LHS multiplied by c_n+1")
+            print(self.LHS)
+            print("Resulting matrix A")
+            print(A)
 
 class gridObj(object):
     """Grid definition of a CFD program"""
@@ -327,7 +337,9 @@ class boundaryConditions(object):
 
     def fixedValueBC(self, cell_face, **kwargs):
         """
-        Fixed BC, so the boundary cell face will have a fixed value, as stored in the model self.model.fixedFaceValues
+        Fixed BC, so the boundary cell face will have a fixed value, as stored in the model self.model.fixedFaceValues. 
+
+        The function returns arrays that are added to the respective matrices, either adding to the rhs_const matrix or correcting the lhs and rhs matrices for implicit and explicit methods, respectively.
 
         :Returns: [lhs, rhs, rhs_const] which are all arrays of size model.vector_size
         """
@@ -341,14 +353,17 @@ class boundaryConditions(object):
             if l == "-":
                 cell_loc = cell_face.replace("-", "0")
                 cell_id = self.model.grid.locations[cell_loc]
-                lhs[cell_id] = conv_contribution[0][0] + diff_contribution[0][0]
-                rhs[cell_id] = conv_contribution[1][0] + diff_contribution[1][0]
+                # Correct ci matrix values: conv += -1/2 u*ci and diff += -1/2 * K*ci
+                lhs[cell_id] = conv_contribution[0][2] + diff_contribution[0][2]*-1
+                rhs[cell_id] = conv_contribution[1][2] + diff_contribution[1][2]*-1
+                # Add c0 matrix values: conv = u*c0 and diff = 2K*c0
                 rhs_const[cell_id] = (conv_contribution[1][0] + diff_contribution[1][0])*2*self.model.fixedFaceValues[d][0]
+
             elif l == "+":
                 cell_loc = cell_face.replace("+", str(self.model.grid.res[d]-1))
                 cell_id = self.model.grid.locations[cell_loc]
-                lhs[cell_id] = conv_contribution[0][2] + diff_contribution[0][2]
-                rhs[cell_id] = conv_contribution[1][2] + diff_contribution[1][2]
+                lhs[cell_id] = conv_contribution[0][0] + diff_contribution[0][0]*-1
+                rhs[cell_id] = conv_contribution[1][0] + diff_contribution[1][0]*-1
                 rhs_const[cell_id] = (conv_contribution[1][2] + diff_contribution[1][2])*2*self.model.fixedFaceValues[d][1]
         
         return lhs, rhs, rhs_const
