@@ -1,0 +1,56 @@
+{
+    "testcase":
+    {
+        "dimensions":1,
+        "resolution":[10],
+        "domain":[10],
+        "faces":[["fixedValue", "fixedValue"]],
+        "dt": 1,
+        "t_end":1,
+        "u": [3],
+        "kappa":[1],
+        "initial_amplitudes":[1],
+        "initial_wavenumbers":[1],
+        "fixedFaceValues":[[1, 10]]
+    },
+    "1D_convdiff_explicit_periodic":
+    {
+        "dimensions":1,
+        "resolution":[100],
+        "domain":[1],
+        "faces":[["periodic", "periodic"]],
+        "dt": 0.001,
+        "t_end":1,
+        "u": [0.5],
+        "kappa":[0.05],
+        "initial_amplitudes":[1],
+        "initial_wavenumbers":[1]
+    },
+    "1D_convdiff_explicit_fixedvalue":
+    {
+        "dimensions":1,
+        "resolution":[100],
+        "domain":[1],
+        "faces":[["fixedValue", "fixedValue"]],
+        "dt": 0.001,
+        "t_end":1,
+        "u": [1],
+        "kappa":[0.01],
+        "initial_amplitudes":[0.1],
+        "initial_wavenumbers":[5],
+        "fixedFaceValues":[[1, 2]]
+    },
+    "2D_convdiff_explicit_periodic":
+    {
+        "dimensions":2,
+        "resolution":[30, 60],
+        "domain":[3,3],
+        "faces":[["periodic", "periodic"], ["periodic", "periodic"]],
+        "dt": 0.01,
+        "t_end":1,
+        "u": [0.1, 0.1],
+        "kappa":[0.01, 0.005],
+        "initial_amplitudes":[1, 1],
+        "initial_wavenumbers":[1, 2]
+    }
+}
