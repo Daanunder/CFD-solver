@@ -44,7 +44,7 @@ class convDiffModel():
         self.boundaryConditions = boundaryConditions(self)
         
         # Set numerical schemes
-        self.divConv = convectionSchemes(self).explicitCentral
+        self.divConv = convectionSchemes(self).explicitUpwindPos
         self.divDiff = diffusionSchemes(self).explicit
 
         # Setup matrix (BC are applied here)
@@ -123,20 +123,13 @@ class convDiffModel():
                 diff = self.divDiff(d)
 
                 # Add diagonal conv and diff terms
-                lhs[ID] += conv[0][1]
-                rhs[ID] += conv[1][1]
-
-                lhs[ID] += diff[0][1]
-                rhs[ID] += diff[1][1]
+                lhs[ID] += conv[0][1] + diff[0][1]
+                rhs[ID] += conv[1][1] + diff[1][1]
 
                 # nsnc = negative side neighbouring cell 
                 if not nsnc == None: # remove if boundary dict is available
-                    lhs[nsnc] += conv[0][0]
-                    rhs[nsnc] += conv[1][0]
-
-                    #print(f"nsnc", d, nsnc, ID, conv[1][0])
-                    lhs[nsnc] += diff[0][0]
-                    rhs[nsnc] += diff[1][0]
+                    lhs[nsnc] += conv[0][0] + diff[0][0]
+                    rhs[nsnc] += conv[1][0] + diff[1][0]
 
                 else:
                     # nsn = cellFace
@@ -148,12 +141,8 @@ class convDiffModel():
                 
                 # psnc = positive side neighbouring cell 
                 if not psnc == None: # remove if boundary dict is available
-                    lhs[psnc] += conv[0][2]
-                    rhs[psnc] += conv[1][2]
-
-                    #print("psnc", d, psnc, ID, conv[1][2])
-                    lhs[psnc] += diff[0][2]
-                    rhs[psnc] += diff[1][2]
+                    lhs[psnc] += conv[0][2] + diff[0][2]
+                    rhs[psnc] += conv[1][2] + diff[1][2]
 
                 else:
                     cell_face_bc = self.grid.cellFaces.get(psn)
@@ -403,22 +392,22 @@ class convectionSchemes(object):
         self.model = model
 
     def explicitCentral(self, dim):
-        return np.array([0, 0, 0]), np.array([1/2, 0, -1/2]) * self.model.dt/self.model.grid.cellVolume * self.model.u[dim]
+        return np.array([0, 0, 0]), np.array([1/2, 0, -1/2]) * self.model.dt/self.model.grid.ds[dim] * self.model.u[dim]
 
     def implicitCentral(self, dim):
-        return np.array([1/2, 0, -1/2]) * self.model.dt/self.model.grid.cellVolume * self.model.u[dim], np.array([0, 0, 0])
+        return np.array([1/2, 0, -1/2]) * self.model.dt/self.model.grid.ds[dim] * self.model.u[dim], np.array([0, 0, 0])
 
     def explicitUpwindPos(self, dim):
-        return np.array([0, 0, 0]), np.array([1/2, -1/2, 0]) * self.model.dt/self.model.grid.cellVolume * self.model.u[dim]
+        return np.array([0, 0, 0]), np.array([1/2, -1/2, 0]) * self.model.dt/self.model.grid.ds[dim] * self.model.u[dim]
 
     def implicitUpwindPos(self, dim):
-        return np.array([1/2, -1/2, 0]) * self.model.dt/self.model.grid.cellVolume * self.model.u[dim], np.array([0, 0, 0])
+        return np.array([1/2, -1/2, 0]) * self.model.dt/self.model.grid.ds[dim] * self.model.u[dim], np.array([0, 0, 0])
 
     def explicitUpwindNeg(self, dim):
-        return np.array([0, 0, 0]), np.array([0, -1/2, 1/2]) * self.model.dt/self.model.grid.cellVolume * self.model.u[dim]
+        return np.array([0, 0, 0]), np.array([0, -1/2, 1/2]) * self.model.dt/self.model.grid.ds[dim] * self.model.u[dim]
 
     def implicitUpwindNeg(self, dim):
-        return np.array([0, -1/2, 1/2]) * self.model.dt/self.model.grid.cellVolume * self.model.u[dim], np.array([0, 0, 0])
+        return np.array([0, -1/2, 1/2]) * self.model.dt/self.model.grid.ds[dim] * self.model.u[dim], np.array([0, 0, 0])
  
 class diffusionSchemes(object):
     """
@@ -430,11 +419,10 @@ class diffusionSchemes(object):
         self.model = model
 
     def explicit(self, dim):
-        return np.array([0, 0, 0]), np.array([1, -2, 1]) * self.model.dt/self.model.grid.cellVolume * self.model.kappa[dim]/self.model.grid.ds[dim]
+        return np.array([0, 0, 0]), np.array([1, -2, 1]) * self.model.dt/self.model.grid.ds[dim] * self.model.kappa[dim]/self.model.grid.ds[dim]
 
     def implicit(self, dim):
-        #return [1, -2, 1] * -1 * self.model.dt/self.model.grid.cellVolume * self.model.kappa/self.model.grid.ds[dim], [0, 0, 0]
-        return np.array([1, -2, 1]) * self.model.dt/self.model.grid.cellVolume * self.model.kappa[dim]/self.model.grid.ds[dim], np.array([0, 0, 0])
+        return np.array([1, -2, 1]) * self.model.dt/self.model.grid.ds[dim] * self.model.kappa[dim]/self.model.grid.ds[dim], np.array([0, 0, 0])
 
 class visualisationObj(object):
     def __init__(self, model):

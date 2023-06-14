@@ -1,17 +1,20 @@
 {
     "testcase":
     {
-        "dimensions":1,
-        "resolution":[10],
-        "domain":[10],
-        "faces":[["fixedValue", "fixedValue"]],
+        "dimensions":2,
+        "resolution":[100, 100],
+        "domain":[100, 100],
+        "faces":[["fixedValue", "fixedValue"], ["fixedValue", "fixedValue"]],
+        "pressure_faces":[["zerogradient", "zerogradient"], ["zerogradient", "zerogradient"]],
+        "velocity_faces":[["fixedWall", "fixedWall"],["fixedWall", "fixedWall"]],
         "dt": 1,
         "t_end":1,
-        "u": [3],
-        "kappa":[1],
-        "initial_amplitudes":[1],
-        "initial_wavenumbers":[1],
-        "fixedFaceValues":[[1, 10]]
+        "u": [1,1],
+        "kappa":[1,1],
+        "initial_amplitudes":[2,2],
+        "initial_wavenumbers":[100,1],
+        "fixedFaceValues":[[1, 10], [1,10]],
+        "log":1
     },
     "1D_convdiff_explicit_periodic":
     {
@@ -33,12 +36,12 @@
         "domain":[1],
         "faces":[["fixedValue", "fixedValue"]],
         "dt": 0.001,
-        "t_end":1,
+        "t_end":1.5,
         "u": [1],
         "kappa":[0.01],
-        "initial_amplitudes":[0.1],
-        "initial_wavenumbers":[5],
-        "fixedFaceValues":[[1, 2]]
+        "initial_amplitudes":[0],
+        "initial_wavenumbers":[1],
+        "fixedFaceValues":[[-1, 1]]
     },
     "2D_convdiff_explicit_periodic":
     {
@@ -52,5 +55,22 @@
         "kappa":[0.01, 0.005],
         "initial_amplitudes":[1, 1],
         "initial_wavenumbers":[1, 2]
+    },
+    "lid_driven_cavity":
+    {
+        "dimensions":2,
+        "resolution":[50, 100],
+        "domain":[1, 1],
+        "faces":[["fixedValue", "fixedValue"], ["fixedValue", "fixedValue"]],
+        "pressure_faces":[["zerogradient", "zerogradient"], ["zerogradient", "zerogradient"]],
+        "velocity_faces":[["fixedWall", "fixedWall"],["fixedWall", "fixedWall"]],
+        "dt": 1,
+        "t_end":1,
+        "u": [1,0.5],
+        "kappa":[1,1],
+        "initial_amplitudes":[1,2],
+        "initial_wavenumbers":[1,1],
+        "fixedFaceValues":[[1, 10], [1,10]],
+        "log":1
     }
 }
