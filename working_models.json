@@ -2,8 +2,8 @@
     "testcase":
     {
         "dimensions":2,
-        "resolution":[100, 100],
-        "domain":[100, 100],
+        "resolution":[10, 10],
+        "domain":[10, 10],
         "faces":[["fixedValue", "fixedValue"], ["fixedValue", "fixedValue"]],
         "pressure_faces":[["zerogradient", "zerogradient"], ["zerogradient", "zerogradient"]],
         "velocity_faces":[["fixedWall", "fixedWall"],["fixedWall", "fixedWall"]],
@@ -11,8 +11,9 @@
         "t_end":1,
         "u": [1,1],
         "kappa":[1,1],
-        "initial_amplitudes":[2,2],
-        "initial_wavenumbers":[100,1],
+        "viscosity":1,
+        "initial_amplitudes":[0,0],
+        "initial_wavenumbers":[1,1],
         "fixedFaceValues":[[1, 10], [1,10]],
         "log":1
     },
