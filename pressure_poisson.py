@@ -1,5 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import axes3d
 import seaborn as sns
 import pandas as pd
 import json
@@ -46,13 +47,16 @@ class pressurePoissonModel():
 
         # Setup matrix (BC are applied here)
         self.create_eom_matrices()
-        self.create_poisson_matrices()
-        self.test_poisson()
+        #self.create_poisson_matrices()
+        #self.test_poisson()
 
         # Set initial conditions
         self.timesteps = np.arange(0, self.t_end+self.dt, self.dt)
         self.current_timestep_index = 0
-        self.result = np.zeros((self.grid.vector_size, self.timesteps.shape[0]))
+        self.vstar_result = np.zeros((self.grid.vector_size, self.timesteps.shape[0]))
+        self.vcorr_result = np.zeros((self.grid.vector_size, self.timesteps.shape[0]))
+        self.vfinal_result = np.zeros((self.grid.vector_size, self.timesteps.shape[0]))
+        self.pressure_result = np.zeros((self.grid.nr_of_cells, self.timesteps.shape[0]))
         self.initialConditions = initialConditions(self).sinusoid(self.initial_amplitudes, self.initial_wavenumbers)
 
     def get_basic_settings(self, modelName):
@@ -65,6 +69,7 @@ class pressurePoissonModel():
         self.initial_amplitudes = np.array(self.settings.get("initial_amplitudes"))
         self.initial_wavenumbers = np.array(self.settings.get("initial_wavenumbers"))
         self.fixedFaceValues = np.array(self.settings.get("fixedFaceValues"))
+        self.wall_velocities = np.array(self.settings.get("wall_velocities"))
         
         self.t_end = self.settings.get("t_end")
         self.dt = self.settings.get("dt")
@@ -227,18 +232,9 @@ class pressurePoissonModel():
             plt.cla()
             plt.close("all")
     
-    def solve_eom(self):
+    def solve_eom(self, vn):
         """
-        # Calculate 
-        # create b with tn
-        #RHS = (np.identity(self.grid.vector_size) + self.RHS)
-        #b = np.dot(RHS, tn) + np.dot(self.RHS_const, np.ones(self.grid.vector_size))
-        # create A
-        #A = np.identity(self.grid.vector_size) - self.LHS
-
-        # solve A, b to obtain tn+1
-        #tn = np.linalg.solve(A, b)
-        #self.result[0:, ti] = tn
+        EOM_LHS * v_star = EOM_RHS * vn + EOM_RHS_const + EOM_RHS_adv
         """
        
         # Update non linear advection terms in RHS_adv
@@ -246,8 +242,19 @@ class pressurePoissonModel():
             for d in range(self.grid.dim):
                 rank = ID*self.grid.dim + d
                 self.EOM_RHS_adv[rank] = self.advVel(d, c)
+            
+        # Explicit part
+        RHS = (np.identity(self.grid.vector_size) + self.EOM_RHS) * self.dt
+        b_const = self.EOM_RHS_const + self.EOM_RHS_adv
+        b = np.dot(RHS, vn) + b_const*self.dt
 
-        pass
+        # Implicit part
+        A = np.identity(self.grid.vector_size) - self.EOM_LHS*self.dt
+
+        # solve A, b to obtain vstar
+        v_star = np.linalg.solve(A, b)
+        self.vstar_result[0:, self.current_timestep_index] = v_star
+
 
     def solve_pressure_poisson(self):
         pass
@@ -260,13 +267,12 @@ class pressurePoissonModel():
 
     def solve(self):
         # Set t0
-        tn = self.result[:,0]
         self.current_timestep_index = 0
         for ti in range(1, self.timesteps.shape[0]):
-            # Solve EOM: vn+1 = EOM(u,v)
-            # TODO:
-            # - Implement boundary conditions
-            self.solve_eom()
+            vn = self.vfinal_result[:,self.current_timestep_index]
+
+            # Solve EOM: vstar = EOM(u,v)
+            self.solve_eom(vn)
 
             # Calculate new pressures pn+1 = Poisson(vn+1)
             # TODO: 
@@ -283,10 +289,13 @@ class pressurePoissonModel():
             # Correct velocities: vn+1 = vn+1 + vc
             # TODO:
             # - Implement velocity correction
+            # - vfinal_result[ti+1] = vn+1
             self.correct_velocities()
-            
+
             # update time index
             self.current_timestep_index = ti
+
+
 
     def getLocalVector(self, ddim, vdim, cell):
         V_i_rank = cell.ID*self.grid.dim + vdim
@@ -383,7 +392,6 @@ class gridObj(object):
             self.cells[i] = cellObj(i, loc, coord, neighbors)
             self.locations[".".join([str(int(l)) for l in loc])] = i
 
-
 class cellObj(object):
     """Cell object containing location and neighbors"""
 
@@ -405,7 +413,6 @@ class cellObj(object):
         self.dim = len(loc)
         self.neighbors = neighbors
         self.coord = coord
-
 
 class boundaryConditions(object):
     """
@@ -476,6 +483,16 @@ class boundaryConditions(object):
     def fixedPressureBC(self, cell_face, **kwargs):
         raise Exception("THIS BC TYPE IS NOT IMPLEMENTED")
 
+    def getWallVelocity(self, cell_face, dimension):
+        # TODO: update to work with 3D
+        if "-" in cell_face:
+            side = 0
+        else:
+            side = 1
+
+        wall_velocity = self.model.wall_velocities[dimension][side]
+        print("Wall velocity: ", "Face: ", cell_face, "Dim: ", dimension, "V: ", wall_velocity)
+        return wall_velocity
 
 class initialConditions(object):
     def __init__(self, model):
@@ -500,8 +517,7 @@ class initialConditions(object):
                 #break
             sin_array = A*np.sin(k*c.coord/self.model.grid.domain*np.pi*2 + p)
             #sinprod = np.prod(A*np.sin(k*c.coord/self.model.grid.domain*np.pi*2 + p))
-            self.model.result[ID][0] = np.prod(sin_array)
-
+            self.model.vfinal_result[ID][0] = np.prod(sin_array)
 
 class advectionSchemes(object):
     """
@@ -537,6 +553,7 @@ class advectionSchemes(object):
             v_vector, negbound, posbound = self.model.getLocalVector(ddim, vdim, cell)
             v_vector, negbound, posbound = self.getVectorValuesFromVector(v_vector, negbound, posbound)
             outer_prod = np.outer(u_vector, v_vector)
+            #print(outer_prod)
             if not negbound:
                 advectiveChange += np.sum(outer_prod * self.negative_coefficient_matrix) * self.model.grid.cellVolume/self.model.grid.ds[ddim]
             if not posbound:
@@ -548,15 +565,14 @@ class advectionSchemes(object):
         # TODO: possibly implement boundary conditions
         V_neg_rank, V_i_rank, V_pos_rank = vector
         if negbound: 
-            V_vector = self.result[:, self.current_timestep_index][[V_i_rank, V_pos_rank]]
-            V_vector[0] = 0
+            V_vector = self.model.vfinal_result[:, self.model.current_timestep_index][[V_i_rank, V_pos_rank]]
+            V_vector = np.append([0], V_vector)
         elif posbound: 
-            V_vector = self.result[:, self.current_timestep_index][[V_neg_rank, V_i_rank]]
-            V_vector[2] = 0
+            V_vector = self.model.vfinal_result[:, self.model.current_timestep_index][[V_neg_rank, V_i_rank]]
+            V_vector = np.append(V_vector, [0])
         else:
-            V_vector = self.result[:, self.current_timestep_index][[V_neg_rank, V_i_rank, V_pos_rank]]
+            V_vector = self.model.vfinal_result[:, self.model.current_timestep_index][[V_neg_rank, V_i_rank, V_pos_rank]]
         return V_vector, negbound, posbound
-
 
 class diffusionSchemes(object):
     """
@@ -574,7 +590,7 @@ class diffusionSchemes(object):
         self.shear_positive_coefficient_matrix = np.array([1, 0, -1])
 
     def explicit(self, dim, c):
-        #print("CELL", c.ID)
+        print("CELL", c.ID)
         lhs = np.zeros(self.model.grid.vector_size)
         rhs = np.zeros(self.model.grid.vector_size)
         # TODO: possibly add rhs const with bc
@@ -582,82 +598,109 @@ class diffusionSchemes(object):
         
         selector = np.s_[:]
         
-        u_vector, negbound_normal, posbound_normal = self.model.getLocalVector(dim, dim, c)
+        ## NORMAL SHEAR COMPONENT
+        u_vector_i, negbound_normal, posbound_normal = self.model.getLocalVector(dim, dim, c)
         if negbound_normal:
-            # implement BC du/dx i-1/2 - Always zero?
+            # implement BC du/dx i-1/2 - Always zero? - Only with accelerations or deformations non zero
             selector = np.s_[1:]
-            #u_bc_face = u_vector[0]
-            #rhs_const += self.model.boundaryConditions.get_contribution(u_bc_face, "fixedWall", "velocity", "momentum"))
         elif posbound_normal:
-            # implement BC du/dx i+1/2 - Always zero?
+            # implement BC du/dx i+1/2 - Always zero? - Only with accelerations or deformations non zero
             selector = np.s_[:-1]
-            #u_bc_face = u_vector[2]
-            #print(u_bc_face, self.model.boundaryConditions.get_contribution(u_bc_face, "fixedWall", "velocity", "momentum"))
         
-        u_vector = u_vector[selector]
+        u_vector_i = u_vector_i[selector]
 
         if not negbound_normal:
-            rhs[u_vector] += self.normal_negative_coefficient_matrix[selector] * self.model.grid.cellVolume/self.model.grid.ds[dim]/self.model.grid.ds[dim] * self.model.viscosity
+            rhs[u_vector_i] += self.normal_negative_coefficient_matrix[selector] * self.model.grid.cellVolume/self.model.grid.ds[dim]/self.model.grid.ds[dim] * self.model.viscosity*2
 
         if not posbound_normal:
-            rhs[u_vector] += self.normal_positive_coefficient_matrix[selector] * self.model.grid.cellVolume/self.model.grid.ds[dim]/self.model.grid.ds[dim] * self.model.viscosity
-
+            rhs[u_vector_i] += self.normal_positive_coefficient_matrix[selector] * self.model.grid.cellVolume/self.model.grid.ds[dim]/self.model.grid.ds[dim] * self.model.viscosity*2
+    
+        ## DIAGONAL SHEAR COMPONENT
         for d in range(self.model.grid.dim):
-            negbound_shear = False
-            posbound_shear = False
+            # Txy|j+1/2 = mu * (du/dy|j+1/2 +  dv/dx|j+1/2)
+            # Txy|j-1/2 = mu * (du/dy|j-1/2 +  dv/dx|j-1/2)
             if d == dim:
                 continue
-        
-            v_vector_i = self.model.getLocalVector(d, dim, c)
+
+            cross_selector = np.s_[:]
+
+            negbound_shear = False
+            posbound_shear = False
+            
+            u_vector_j, _, _ = self.model.getLocalVector(d, dim, c)
+
+            v_vector_i, _, _ = self.model.getLocalVector(dim, d, c)
+            v_vector_i = v_vector_i[selector]
 
             nsn, psn =  c.neighbors[d]
+
             nsn_id = self.model.grid.locations.get(nsn)
+            psn_id = self.model.grid.locations.get(psn)
+            if nsn_id == None:
+                nsn_cell_face = nsn
+                cross_selector = np.s_[1:]
+            elif psn_id == None:
+                psn_cell_face = psn
+                cross_selector = np.s_[:-1]
+
+            u_vector_j = u_vector_j[cross_selector]
+
             if not nsn_id == None:
                 nsnc = self.model.grid.cells.get(nsn_id)
-                u_vector_n, negbound_temp, posbound_temp = self.model.getLocalVector(dim, dim, nsnc)
+                v_vector_jm1, negbound_temp, posbound_temp = self.model.getLocalVector(dim, d, nsnc)
                 if not negbound_temp == negbound_normal or not posbound_temp == posbound_normal:
                     raise Exception("Something is wrong 1")
                 if negbound_normal:
                     # TODO: Apply BC in approximation of gradient 1.5 \Delta y
-                    un_bc_face = u_vector_n[0]
-                    #print(un_bc_face, self.model.boundaryConditions.get_contribution(un_bc_face, "fixedWall", "velocity", "momentum"))
-                if posbound_normal:
+                    cross_distance = self.model.grid.ds[d]*1.5
+                elif posbound_normal:
                     # TODO: Apply BC in approximation of gradient 1.5 \Delta y
-                    un_bc_face = u_vector_n[2]
-                    #print(un_bc_face, self.model.boundaryConditions.get_contribution(un_bc_face, "fixedWall", "velocity", "momentum"))
+                    cross_distance = self.model.grid.ds[d]*1.5
+                else:
+                    cross_distance = self.model.grid.ds[d]*2
 
-                u_vector_n = u_vector_n[selector]
-
-                rhs[u_vector_n] += self.shear_negative_coefficient_matrix[selector] * self.model.grid.cellVolume/self.model.grid.ds[dim]*self.model.viscosity * 1/2 * 1/(self.model.grid.ds[d]*2)
-                rhs[u_vector] += self.shear_negative_coefficient_matrix[selector] * self.model.grid.cellVolume/self.model.grid.ds[dim]*self.model.viscosity * 1/2 * 1/(self.model.grid.ds[d]*2)
+                rhs[u_vector_j] += self.normal_negative_coefficient_matrix[cross_selector] / self.model.grid.ds[dim]
+                v_vector_jm1 = v_vector_jm1[selector]
+                rhs[v_vector_jm1] += self.shear_negative_coefficient_matrix[selector] *  1/2 / cross_distance 
+                rhs[v_vector_i] += self.shear_negative_coefficient_matrix[selector] *  1/2 / cross_distance
 
             else:
-                # TODO: implement BC du/dy i-1/2
-                negbound_shear = True
+                #du/dy|j-1/2 = (uj - Uwall)/0.5y 
+                #dv/dx|j-1/2 = 0
+                cell_rank = c.ID*self.model.grid.dim + dim
+                rhs[cell_rank] += 1 / (1/2*self.model.grid.ds[d])
+                rhs_const += -self.model.boundaryConditions.getWallVelocity(nsn, d) / (1/2*self.model.grid.ds[d])
 
-            psn_id = self.model.grid.locations.get(psn)
             if not psn_id == None:
                 psnc = self.model.grid.cells.get(psn_id)
-                u_vector_p, negbound_temp, posbound_temp = self.model.getLocalVector(dim, dim, psnc)
+                v_vector_jp1, negbound_temp, posbound_temp = self.model.getLocalVector(dim, d, psnc)
                 if not negbound_temp == negbound_normal or not posbound_temp == posbound_normal:
                     raise Exception("Something is wrong 2")
                 if negbound_normal:
-                    # TODO: Apply BC in approximation of gradient 1.5 \Delta y
-                    un_bc_face = u_vector_p[0]
-                    #print(un_bc_face, self.model.boundaryConditions.get_contribution(un_bc_face, "fixedWall", "velocity", "momentum"))
-                if posbound_normal:
-                    # TODO: Apply BC in approximation of gradient 1.5 \Delta y
-                    un_bc_face = u_vector_p[2]
-                    #print(un_bc_face, self.model.boundaryConditions.get_contribution(un_bc_face, "fixedWall", "velocity", "momentum"))
-                
-                u_vector_p = u_vector_p[selector]
-                rhs[u_vector_p] += self.shear_positive_coefficient_matrix[selector] * self.model.grid.cellVolume/self.model.grid.ds[dim]*self.model.viscosity * 1/2 * 1/(self.model.grid.ds[d]*2)
-                rhs[u_vector] += self.shear_positive_coefficient_matrix[selector] * self.model.grid.cellVolume/self.model.grid.ds[dim]*self.model.viscosity * 1/2 * 1/(self.model.grid.ds[d]*2)
+                    #Apply BC in approximation of gradient 1.5 \Delta y
+                    cross_distance = self.model.grid.ds[d]*1.5
+                elif posbound_normal:
+                    #Apply BC in approximation of gradient 1.5 \Delta y
+                    cross_distance = self.model.grid.ds[d]*1.5
+                else:
+                    cross_distance = self.model.grid.ds[d]*2
+
+                rhs[u_vector_j] += self.normal_positive_coefficient_matrix[cross_selector] / self.model.grid.ds[dim]
+                v_vector_jp1 = v_vector_jp1[selector]
+                rhs[v_vector_jp1] += self.shear_positive_coefficient_matrix[selector] *  1/2 / cross_distance
+                rhs[v_vector_i] += self.shear_positive_coefficient_matrix[selector] *  1/2 / cross_distance
 
             else:
-                # TODO: implement BC du/dy i+1/2
-                posbound_shear = True
-
+                #du/dy|j+1/2 = (Uwall - uj)/0.5y 
+                #dv/dx|j-1/2 = 0
+                cell_rank = c.ID*self.model.grid.dim + dim
+                rhs[cell_rank] += -1 / (1/2*self.model.grid.ds[d])
+                rhs_const += self.model.boundaryConditions.getWallVelocity(nsn, d) / (1/2*self.model.grid.ds[d])
+        
+        
+        lhs = lhs * self.model.viscosity * self.model.grid.cellVolume/self.model.grid.ds[dim]
+        rhs = rhs * self.model.viscosity * self.model.grid.cellVolume/self.model.grid.ds[dim]
+        rhs_const = rhs_const * self.model.viscosity * self.model.grid.cellVolume/self.model.grid.ds[dim]
         return lhs, rhs, rhs_const
 
     def implicit(self, dim, c):
@@ -705,7 +748,6 @@ class divMomentumSchemes(object):
     def explicit(self, dim):
         return np.array([0, 0, 0]), np.array([0, 0, 0])
 
-
 class visualisationObj(object):
     def __init__(self, model):
         self.model = model
@@ -743,7 +785,47 @@ class visualisationObj(object):
             plt.savefig(f"./results/2D-{self.model.name}-t{t:.3f}.png")
             plt.cla()
             plt.close("all")
+    
+    def plot2DVectorField(self, data):
+        #split data
+        split_data = data.reshape(self.model.grid.nr_of_cells, 2)
+        u_data = split_data[0:, 0]
+        v_data = split_data[0:, 1]
 
+        x,y = np.meshgrid(np.linspace(0,self.model.grid.domain[0],self.model.grid.res[0]),
+                            np.linspace(0,self.model.grid.domain[1], self.model.grid.res[1]),
+                            )
+        
+        u_data = u_data.reshape((self.model.grid.res[1], self.model.grid.res[0]))
+        v_data = v_data.reshape((self.model.grid.res[1], self.model.grid.res[0]))
+
+        plt.quiver(x,y,u_data,v_data, scale=250*self.model.viscosity*self.model.dt*self.model.grid.ds.mean())
+        plt.savefig("./results/2D-quiver.png")
+        plt.cla()
+        plt.close("all")
+        
+    def plot3DVectorField(self, data):
+        fig = plt.figure()
+        ax = fig.gca(projection='3d')
+
+        x,y,z = np.meshgrid(np.linspace(0,self.model.grid.domain[0],self.model.grid.res[0]),
+                            np.linspace(0,self.model.grid.domain[1], self.model.grid.res[1]),
+                            np.linspace(0,self.model.grid.domain[2], self.model.grid.res[2]),
+                            )
+
+        split_data = data.reshape(self.model.grid.nr_of_cells, 3)
+        u_data = split_data[0:, 0]
+        v_data = split_data[0:, 1]
+        w_data = split_data[0:, 2]
+
+        u_data = u_data.reshape((self.model.grid.res[1], self.model.grid.res[0]))
+        v_data = v_data.reshape((self.model.grid.res[1], self.model.grid.res[0]))
+        w_data = w_data.reshape((self.model.grid.res[1], self.model.grid.res[0]))
+
+        ax.quiver(x, y, z, u_data, v_data, w_data, scale=250*self.model.viscosity*self.model.dt*self.model.grid.ds.mean(), color = 'black')
+        plt.savefig("./results/3D-quiver.png")
+        plt.cla()
+        plt.close("all")
 
 class analyticalSolution(object):
     def __init__(self, model):
