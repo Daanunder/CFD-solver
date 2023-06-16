@@ -16,7 +16,6 @@ class pressurePoissonModel():
 
     """
     def __init__(self, modelName):
-        # Initialize model
         self.get_basic_settings(modelName)
 
         # Init grid
@@ -47,7 +46,8 @@ class pressurePoissonModel():
 
         # Setup matrix (BC are applied here)
         self.create_eom_matrices()
-        #self.create_poisson_matrices()
+        self.create_poisson_matrices()
+        self.create_pressure_correction_matrices()
         #self.test_poisson()
 
         # Set initial conditions
@@ -76,9 +76,9 @@ class pressurePoissonModel():
         self.u = np.array(self.settings.get("u"))
         self.kappa = np.array(self.settings.get("kappa"))
         self.viscosity = self.settings.get("viscosity")
+        self.density = self.settings.get("density")
 
     def check_initial_stability(self):
-        # Stability checks
         print("Stability numbers")
 
         self.CFL = self.dt / self.grid.ds * self.u
@@ -136,64 +136,40 @@ class pressurePoissonModel():
                 self.EOM_RHS_const[rank] = diff[2]
             
     def create_poisson_matrices(self):
-        # Initialize global matrices 
-        self.POIS_LHS = np.zeros((self.grid.vector_size, self.grid.vector_size))
-        self.POIS_RHS = np.zeros((self.grid.vector_size, self.grid.vector_size))
-        self.POIS_RHS_const = np.zeros((self.grid.vector_size, self.grid.vector_size))
+        self.POIS_LHS = np.zeros((self.grid.nr_of_cells, self.grid.nr_of_cells))
+        self.POIS_RHS = np.zeros((self.grid.nr_of_cells, self.grid.vector_size))
+        self.POIS_RHS_const = np.zeros(self.grid.nr_of_cells)
         
         for ID, c in self.grid.cells.items():
-            lhs = np.zeros(self.grid.vector_size)
+            lhs = np.zeros(self.grid.nr_of_cells)
             rhs = np.zeros(self.grid.vector_size)
-            rhs_const = np.zeros(self.grid.vector_size)
 
-            # positive side cell and negative side cell neighbours in each dimension
-            for d, (nsn, psn) in enumerate(c.neighbors):
-                nsnc = self.grid.locations.get(nsn)
-                psnc = self.grid.locations.get(psn)
-
-                # Get discrete contributions of all terms in dimension d
-                laplace_pres = self.laplacePres(d)
-                div_mom  = self.divMomentum(d)
-
-                # Add diagonal conv and diff terms
-                lhs[ID] += div_mom[0][1] + laplace_pres[0][1]
-                rhs[ID] += div_mom[1][1] + laplace_pres[1][1]
-
-                # nsnc = negative side neighbouring cell 
-                if not nsnc == None: # remove if boundary dict is available
-                    lhs[nsnc] += div_mom[0][0] + laplace_pres[0][0]
-                    rhs[nsnc] += div_mom[1][0] + laplace_pres[1][0]
-
-                else:
-                    pressure_bc = self.grid.cellFaces.get(nsn).get("pressure")
-                    velocity_bc = self.grid.cellFaces.get(nsn).get("velocity")
-                    pressure_bc_contribution = self.boundaryConditions.get_contribution(nsn, pressure_bc, "pressure", "poisson")
-                    #velocity_bc_contribution = self.boundaryConditions.get_contribution(nsn, velocity_bc, "velocity", "poisson")
-                    lhs += pressure_bc_contribution
-                    #rhs += velocity_bc
-
-                # psnc = positive side neighbouring cell 
-                if not psnc == None: # remove if boundary dict is available
-                    lhs[psnc] += div_mom[0][2] + laplace_pres[0][2]
-                    rhs[psnc] += div_mom[1][2] + laplace_pres[1][2]
-
-                else:
-                    pressure_bc = self.grid.cellFaces.get(psn).get("pressure")
-                    velocity_bc = self.grid.cellFaces.get(psn).get("velocity")
-                    pressure_bc_contribution = self.boundaryConditions.get_contribution(psn, pressure_bc, "pressure", "poisson")
-                    #velocity_bc_contribution = self.boundaryConditions.get_contribution(psn, velocity_bc, "velocity", "poisson")
-                    lhs += pressure_bc_contribution
-                    #rhs += velocity_bc
+            # For current cell, add contributions of all dimensions 
+            for d in range(self.grid.dim):
+                lhs += self.laplacePres(c, d)
+                rhs += self.divMomentum(c, d)
             
             self.POIS_LHS[ID] = lhs
             self.POIS_RHS[ID] = rhs
-            self.POIS_RHS_const[ID] = rhs_const
+
+        # avoid singular matrix
+        #p_ref_vector = np.zeros(self.grid.nr_of_cells)
+        #p_ref_vector[0] = 1
+        #self.POIS_LHS[0] = p_ref_vector
+
+        #p_ref_value = 0
+        #self.POIS_RHS_const[0] = p_ref_value
+
+        #self.POIS_RHS[0] = np.zeros(self.grid.vector_size)
     
     def create_pressure_correction_matrices(self):
-        pass
+        self.CORR_RHS = np.zeros((self.grid.vector_size, self.grid.nr_of_cells))
+        for ID, c in self.grid.cells.items():
+            for d in range(self.grid.dim):
+                rank = c.ID*self.grid.dim + d
+                self.CORR_RHS[rank] = self.gradPres(c, d)
 
     def test_poisson(self):
-        # Set Q
         self.Q_vector = np.zeros(self.grid.vector_size)
         for ID, c in self.grid.cells.items():
             self.Q_vector[ID] = self.analyticalSolution.test_equation(c.coord)
@@ -232,11 +208,12 @@ class pressurePoissonModel():
             plt.cla()
             plt.close("all")
     
-    def solve_eom(self, vn):
+    def solve_eom(self):
         """
         EOM_LHS * v_star = EOM_RHS * vn + EOM_RHS_const + EOM_RHS_adv
         """
-       
+        print("Solving EOM, time: ", self.current_timestep_index) 
+        vn = self.vfinal_result[:,self.current_timestep_index]
         # Update non linear advection terms in RHS_adv
         for ID,c in self.grid.cells.items():
             for d in range(self.grid.dim):
@@ -244,57 +221,49 @@ class pressurePoissonModel():
                 self.EOM_RHS_adv[rank] = self.advVel(d, c)
             
         # Explicit part
-        RHS = (np.identity(self.grid.vector_size) + self.EOM_RHS) * self.dt
+        RHS = (np.identity(self.grid.vector_size) + self.EOM_RHS) * self.dt/self.grid.cellVolume
         b_const = self.EOM_RHS_const + self.EOM_RHS_adv
-        b = np.dot(RHS, vn) + b_const*self.dt
+        b = np.dot(RHS, vn) + b_const*self.dt/self.grid.cellVolume
 
         # Implicit part
-        A = np.identity(self.grid.vector_size) - self.EOM_LHS*self.dt
+        A = np.identity(self.grid.vector_size) - self.EOM_LHS*self.dt/self.grid.cellVolume
 
         # solve A, b to obtain vstar
         v_star = np.linalg.solve(A, b)
         self.vstar_result[0:, self.current_timestep_index] = v_star
 
-
     def solve_pressure_poisson(self):
-        pass
+        print("Solving Poisson, time: ", self.current_timestep_index) 
+        vstar = self.vstar_result[0:, self.current_timestep_index]
+        b = np.dot(self.POIS_RHS, vstar) + self.POIS_RHS_const
+        A = self.POIS_LHS 
+        self.pressure_result[0:, self.current_timestep_index] = np.linalg.solve(A,b)
 
     def calc_velocity_correction(self):
-        pass
+        self.vcorr_result[0:, self.current_timestep_index] = np.dot(self.CORR_RHS, self.pressure_result[0:, self.current_timestep_index])
     
     def correct_velocities(self):
-        pass
+        self.vfinal_result[0:, self.current_timestep_index+1] = self.vstar_result[0:, self.current_timestep_index] + self.vcorr_result[0:, self.current_timestep_index] 
 
     def solve(self):
         # Set t0
         self.current_timestep_index = 0
         for ti in range(1, self.timesteps.shape[0]):
-            vn = self.vfinal_result[:,self.current_timestep_index]
 
             # Solve EOM: vstar = EOM(u,v)
-            self.solve_eom(vn)
+            self.solve_eom()
 
             # Calculate new pressures pn+1 = Poisson(vn+1)
-            # TODO: 
-            # - Implement RHS grad(vn+1) matrices
-            # - Implement boundary conditions
             self.solve_pressure_poisson()
-
+            
             # Calculate velocity correction: vc = - dt/rho * grad(pc)
-            # TODO: 
-            # - Implement matrices grad(pn+1)
-            # - Implement boundary conditions
             self.calc_velocity_correction()
 
             # Correct velocities: vn+1 = vn+1 + vc
-            # TODO:
-            # - Implement velocity correction
-            # - vfinal_result[ti+1] = vn+1
             self.correct_velocities()
 
             # update time index
             self.current_timestep_index = ti
-
 
 
     def getLocalVector(self, ddim, vdim, cell):
@@ -590,7 +559,7 @@ class diffusionSchemes(object):
         self.shear_positive_coefficient_matrix = np.array([1, 0, -1])
 
     def explicit(self, dim, c):
-        print("CELL", c.ID)
+        #print("CELL", c.ID)
         lhs = np.zeros(self.model.grid.vector_size)
         rhs = np.zeros(self.model.grid.vector_size)
         # TODO: possibly add rhs const with bc
@@ -608,12 +577,13 @@ class diffusionSchemes(object):
             selector = np.s_[:-1]
         
         u_vector_i = u_vector_i[selector]
-
+        
+        normal_distance = self.model.grid.ds[dim]
         if not negbound_normal:
-            rhs[u_vector_i] += self.normal_negative_coefficient_matrix[selector] * self.model.grid.cellVolume/self.model.grid.ds[dim]/self.model.grid.ds[dim] * self.model.viscosity*2
+            rhs[u_vector_i] += self.normal_negative_coefficient_matrix[selector]*2 / normal_distance
 
         if not posbound_normal:
-            rhs[u_vector_i] += self.normal_positive_coefficient_matrix[selector] * self.model.grid.cellVolume/self.model.grid.ds[dim]/self.model.grid.ds[dim] * self.model.viscosity*2
+            rhs[u_vector_i] += self.normal_positive_coefficient_matrix[selector]*2 / normal_distance 
     
         ## DIAGONAL SHEAR COMPONENT
         for d in range(self.model.grid.dim):
@@ -710,32 +680,83 @@ class diffusionSchemes(object):
 
 class gradientPressureSchemes(object):
     """
-    Provide diffusion discretization functions based on the given dimension. Returns the terms for the local matrix based on temporal and spatial discretization scheme.
+    Provides the discretization of the pressure gradient for the velocity correction
 
-    :Returns: [lhs, rhs, rhs_const]
+    :Returns: array-like of size self.model.grid.nr_of_cells: rhs contribution to the velocity correction
     """
     def __init__(self, model):
         self.model = model
+        self.negative_coefficient_matrix = [-1/2, -1/2, 0]
+        self.positive_coefficient_matrix = [0, 1/2, 1/2]
 
-    def explicit(self, dim):
-        return np.array([0, 0, 0]), np.array([1, -2, 1]) * self.model.dt/self.model.grid.cellVolume * self.model.kappa[dim]/self.model.grid.ds[dim]
+    def explicit(self, c, dim):
+        rhs = np.zeros(self.model.grid.nr_of_cells)
+        nsn, psn = c.neighbors[dim]
+        
+        negbound = False
+        posbound = False
 
-    def implicit(self, dim):
-        #return [1, -2, 1] * -1 * self.model.dt/self.model.grid.cellVolume * self.model.kappa/self.model.grid.ds[dim], [0, 0, 0]
-        return np.array([1, -2, 1]) * self.model.dt/self.model.grid.cellVolume * self.model.kappa[dim]/self.model.grid.ds[dim], np.array([0, 0, 0])
+        nsnc = self.model.grid.locations.get(nsn)
+        psnc = self.model.grid.locations.get(psn)
+
+        selector = np.s_[:]
+        p_vector = [nsnc, c.ID, psnc]
+        normal_distance = self.model.grid.ds[dim]
+        if nsnc == None:
+            negbound = True
+            selector = np.s_[1:]
+
+        elif psnc == None:
+            posbound = True
+            selector = np.s_[:-1] 
+
+        if not negbound:
+            rhs[p_vector[selector]] += self.negative_coefficient_matrix[selector] / normal_distance
+        if not posbound:
+            rhs[p_vector[selector]] += self.positive_coefficient_matrix[selector] / normal_distance
+        
+        rhs = -1 * rhs * self.model.dt / self.model.density
+
+        return rhs
 
 class laplacianPressureSchemes(object):
     """
-    Provide diffusion discretization functions based on the given dimension. Returns the terms for the local matrix based on temporal and spatial discretization scheme.
+    Provide laplacian discetization in the given dimension for the given cell, i.e. rank in the matrix. 
 
-    :Returns: [lhs, rhs, rhs_const]
+    :Returns: array-like of size self.model.grid.nr_of_cells: lhs contribution to the equation for the given cell in the given dimension
     """
     def __init__(self, model):
         self.model = model
+        self.negative_coefficient_matrix = [1, -1, 0]
+        self.positive_coefficient_matrix = [0, -1, 1]
 
-    def explicit(self, dim):
-        return np.array([1, -2, 1]) / self.model.grid.ds[dim]**2, np.array([0, 0, 0])
+    def explicit(self, c, dim):
+        lhs = np.zeros(self.model.grid.nr_of_cells)
+        nsn, psn = c.neighbors[dim]
+        
+        negbound = False
+        posbound = False
 
+        nsnc = self.model.grid.locations.get(nsn)
+        psnc = self.model.grid.locations.get(psn)
+
+        selector = np.s_[:]
+        p_vector = [nsnc, c.ID, psnc]
+        if nsnc == None:
+            negbound = True
+            selector = np.s_[1:]
+        elif psnc == None:
+            posbound = True
+            selector = np.s_[:-1] 
+        normal_distance = self.model.grid.ds[dim]
+        if not negbound:
+            lhs[p_vector[selector]] += self.negative_coefficient_matrix[selector] / normal_distance
+        if not posbound:
+            lhs[p_vector[selector]] += self.positive_coefficient_matrix[selector] / normal_distance
+        
+        lhs = lhs * self.model.grid.cellVolume/self.model.grid.ds[dim]
+        return lhs
+        
 class divMomentumSchemes(object):
     """
     Provide diffusion discretization functions based on the given dimension. Returns the terms for the local matrix based on temporal and spatial discretization scheme.
@@ -744,9 +765,35 @@ class divMomentumSchemes(object):
     """
     def __init__(self, model):
         self.model = model
+        self.negative_coefficient_matrix = [-1/2, -1/2, 0]
+        self.positive_coefficient_matrix = [0, 1/2, 1/2]
 
-    def explicit(self, dim):
-        return np.array([0, 0, 0]), np.array([0, 0, 0])
+    def explicit(self, c, dim):
+        rhs = np.zeros(self.model.grid.vector_size)
+        nsn, psn = c.neighbors[dim]
+        negbound = False
+        posbound = False
+
+        nsnc = self.model.grid.locations.get(nsn)
+        psnc = self.model.grid.locations.get(psn)
+
+        selector = np.s_[:]
+        u_vector, _, _ = self.model.getLocalVector(dim, dim, c)
+        if nsnc == None:
+            negbound = True
+            selector = np.s_[1:]
+        elif psnc == None:
+            posbound = True
+            selector = np.s_[:-1] 
+
+        normal_distance = self.model.grid.ds[dim]
+        if not negbound:
+            rhs[u_vector[selector]] += self.negative_coefficient_matrix[selector]
+        if not posbound:
+            rhs[u_vector[selector]] += self.positive_coefficient_matrix[selector]
+        
+        rhs = rhs * self.model.density/self.model.dt/self.model.grid.ds[dim]
+        return rhs
 
 class visualisationObj(object):
     def __init__(self, model):
@@ -786,7 +833,7 @@ class visualisationObj(object):
             plt.cla()
             plt.close("all")
     
-    def plot2DVectorField(self, data):
+    def plot2DVectorField(self, data, fname="2D-quiver"):
         #split data
         split_data = data.reshape(self.model.grid.nr_of_cells, 2)
         u_data = split_data[0:, 0]
@@ -799,8 +846,10 @@ class visualisationObj(object):
         u_data = u_data.reshape((self.model.grid.res[1], self.model.grid.res[0]))
         v_data = v_data.reshape((self.model.grid.res[1], self.model.grid.res[0]))
 
-        plt.quiver(x,y,u_data,v_data, scale=250*self.model.viscosity*self.model.dt*self.model.grid.ds.mean())
-        plt.savefig("./results/2D-quiver.png")
+        fig = plt.figure()
+        #plt.quiver(x,y,u_data,v_data, scale=1.5*10**5*self.model.viscosity*self.model.dt*self.model.grid.ds.mean())
+        plt.quiver(x,y,u_data,v_data)
+        plt.savefig(f"./results/{fname}.png")
         plt.cla()
         plt.close("all")
         
@@ -826,6 +875,28 @@ class visualisationObj(object):
         plt.savefig("./results/3D-quiver.png")
         plt.cla()
         plt.close("all")
+        
+    def plot2DContour(self, data, fname="2D-contour"):
+        x,y = np.meshgrid(np.linspace(0,self.model.grid.domain[0],self.model.grid.res[0]),
+                            np.linspace(0,self.model.grid.domain[1], self.model.grid.res[1]),
+                            )
+        
+        p_data = data.reshape((self.model.grid.res[1], self.model.grid.res[0]))
+        
+        fig,ax = plt.subplots()
+        cs = ax.contourf(x,y,p_data)
+        cbar = fig.colorbar(cs)
+        cbar.ax.set_ylabel('Pressure')
+        plt.savefig(f"./results/{fname}.png")
+        plt.cla()
+        plt.close("all")
+    
+    def plotTimeStepIteration(self, t=0):
+        self.plot2DVectorField(self.model.vfinal_result[0:, t], fname=f"vfinal-t{t}-vector")
+        self.plot2DVectorField(self.model.vstar_result[0:, t], fname=f"vstar-t{t}-vector")
+        self.plot2DContour(self.model.pressure_result[0:, t], fname=f"pressure-t{t}-contour")
+        self.plot2DVectorField(self.model.vcorr_result[0:, t], fname=f"vcorr-t{t}-vector")
+        self.plot2DVectorField(self.model.vfinal_result[0:, t+1], fname=f"vfinal-t{t+1}-vector")
 
 class analyticalSolution(object):
     def __init__(self, model):
